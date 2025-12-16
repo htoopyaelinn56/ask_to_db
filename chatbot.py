@@ -2,6 +2,11 @@ import os
 
 from openrouter import OpenRouter
 from dotenv import load_dotenv
+import psycopg2
+import psycopg2.extras
+
+from db_service import get_connection
+from embedding_service import embed_text
 
 load_dotenv()
 
@@ -10,23 +15,107 @@ openrouter_client = OpenRouter(api_key=openrouter_api_key)
 
 DEFAULT_MODEL = "google/gemma-3-27b-it:free"
 
+def _to_pgvector_literal(vec: list[float]) -> str:
+    """Convert a list of floats into pgvector text representation: [v1, v2, ...]."""
+    return "[" + ", ".join(f"{float(x):.6f}" for x in vec) + "]"
 
-def chat_once(prompt: str, model: str = DEFAULT_MODEL):
-    """Send a single prompt and stream the response to stdout."""
+
+def retrieve_similar_products(query: str, top_k: int = 5):
+    """
+    Embed the query, search for top_k most similar products using cosine distance,
+    and return a list of product dicts with their similarity scores.
+    """
+    # Embed the user query
+    query_vec = embed_text(query)
+    vec_literal = _to_pgvector_literal(query_vec)
+
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            # Use cosine distance: 1 - (embedding <=> query_embedding)
+            # Smaller distance = more similar
+            cur.execute(
+                """
+                SELECT id, name, name_mm, description, description_mm,
+                       category, brand, price, stock_quantity,
+                       1 - (embedding <=> %s::vector) AS similarity
+                FROM products
+                WHERE embedding IS NOT NULL
+                ORDER BY embedding <=> %s::vector ASC
+                    LIMIT %s
+                """,
+                (vec_literal, vec_literal, top_k),
+            )
+            rows = cur.fetchall()
+            return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def build_context(products: list[dict]) -> str:
+    """Format the retrieved products into a context string for the LLM."""
+    if not products:
+        return "No relevant products found in the database."
+
+    lines = ["Here are the relevant products from our database:\n"]
+    for idx, p in enumerate(products, start=1):
+        lines.append(f"{idx}. **{p.get('name')}** ({p.get('name_mm')})")
+        lines.append(f"   - Category: {p.get('category')}, Brand: {p.get('brand')}")
+        lines.append(f"   - Price: ${p.get('price')}, Stock: {p.get('stock_quantity')}")
+        if p.get('description'):
+            lines.append(f"   - Description: {p.get('description')}")
+        if p.get('description_mm'):
+            lines.append(f"   - Description (MM): {p.get('description_mm')}")
+        lines.append(f"   - Similarity: {p.get('similarity', 0):.3f}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+SYSTEM_PROMPT = """You are a helpful product assistant with access to a product database.
+Your role is to answer user questions about products based ONLY on the context provided below.
+
+Instructions:
+- Use the product information from the context to answer questions accurately to give easy and understandable response 
+  for user friendly way informally.
+- If the context doesn't contain relevant information, say "I don't have information about that in our database."
+- Support both English and Myanmar (Burmese) language queries.
+- Only respond in the language of the user's question.
+- If the question is about greeting or similar, respond politely without using the context
+- Be concise and helpful.
+- Do not make up information that isn't in the context.
+"""
+
+
+def chat_with_rag(prompt: str, model: str = DEFAULT_MODEL, top_k: int = 5):
+    """Retrieve relevant products, build context, and chat with RAG-enhanced prompt."""
+    # Retrieve similar products
+    products = retrieve_similar_products(prompt, top_k=top_k)
+    context = build_context(products)
+
+    # Build messages with system prompt and context
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": f"Context:\n{context}\n\nUser Question: {prompt}"}
+    ]
+
+    # Stream response
     stream = openrouter_client.chat.send(
         model=model,
-        messages=[{"role": "user", "content": prompt}],
+        messages=messages,
         stream=True,
     )
     for chunk in stream:
         content = chunk.choices[0].delta.content if chunk.choices else None
         if content:
-            print(content, end="", flush=True)
+            print(content.rstrip(), end="", flush=True)
     print()  # newline after streaming completes
 
 
 def main():
-    print("Interactive chatbot. Type your prompt and press Enter. Type /exit to quit.")
+    print("RAG-Enhanced Product Chatbot")
+    print("Ask questions about products in English or Myanmar.")
+    print("Commands: /exit, /quit to exit\n")
+
     model = DEFAULT_MODEL
     while True:
         try:
@@ -41,9 +130,9 @@ def main():
             print("Goodbye.")
             break
 
-        # Single-turn chat; you can extend this to keep history if needed
+        # RAG-enhanced chat
         try:
-            chat_once(user_input, model=model)
+            chat_with_rag(user_input, model=model, top_k=5)
         except Exception as e:
             print(f"[ERROR] Chat failed: {e}")
 

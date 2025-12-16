@@ -177,4 +177,5 @@ def set_embeddings(batch_size: int = 50):
         conn.close()
 
 
-set_embeddings()
+if __name__ == "__main__":
+    set_embeddings(batch_size=50)

@@ -1,19 +1,9 @@
-import os
-
-from openrouter import OpenRouter
-from dotenv import load_dotenv
 import psycopg2
 import psycopg2.extras
 
+from ai_service import gemini_client, DEFAULT_MODEL
 from db_service import get_connection
 from embedding_service import embed_text
-
-load_dotenv()
-
-openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
-openrouter_client = OpenRouter(api_key=openrouter_api_key)
-
-DEFAULT_MODEL = "google/gemma-3-27b-it:free"
 
 def _to_pgvector_literal(vec: list[float]) -> str:
     """Convert a list of floats into pgvector text representation: [v1, v2, ...]."""
@@ -93,21 +83,25 @@ def chat_with_rag(prompt: str, model: str = DEFAULT_MODEL, top_k: int = 5):
     context = build_context(products)
 
     # Build messages with system prompt and context
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": f"Context:\n{context}\n\nUser Question: {prompt}"}
-    ]
+    messages = f"""
+            System Instructions:
+            {SYSTEM_PROMPT}
+            
+            Context Information:
+            {context}
+            
+            User Question: {prompt}
+            
+            Answer:"""
 
     # Stream response
-    stream = openrouter_client.chat.send(
+    stream = gemini_client.models.generate_content_stream(
         model=model,
-        messages=messages,
-        stream=True,
+        contents=messages,
     )
     for chunk in stream:
-        content = chunk.choices[0].delta.content if chunk.choices else None
-        if content:
-            print(content.rstrip(), end="", flush=True)
+        if chunk.text:
+            print(chunk.text, end="", flush=True)
     print()  # newline after streaming completes
 
 

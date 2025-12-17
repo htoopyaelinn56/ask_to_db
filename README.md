@@ -7,6 +7,7 @@ Simple demo app that lets you chat with a product database using AI and embeddin
 - Python 3 installed
 - Required Python packages installed (check imports in `ai_service.py`, `db_service.py`, `embedding_service.py`, `chatbot.py` and install via pip as needed)
 - SQLite or the database configured in `db_service.py`
+- [EmbeddingGemma](https://huggingface.co/google/embeddinggemma-300m)
 
 ## 1. Set up the database
 

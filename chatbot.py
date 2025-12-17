@@ -90,10 +90,11 @@ def execute_sql_query(sql_query: str):
         conn.close()
 
 def handle_sql_query(user_query: str, model: str):
-    """
+    """Generator that:
     1. Generates SQL based on user question.
     2. Runs SQL.
-    3. Synthesizes answer.
+    3. Streams a synthesized natural-language answer.
+    Yields text chunks suitable for streaming to the client.
     """
     schema = get_table_schema()
 
@@ -110,6 +111,7 @@ def handle_sql_query(user_query: str, model: str):
     4. If the user asks for 'count', use 'COUNT(*)'.
     5. Do not use INSERT, UPDATE, or DELETE. Read-only.
     6. Only Select name column when listing products.
+    7. Make sure the SQL is valid PostgreSQL and references only existing columns.
     
     User Question: {user_query}
     SQL:
@@ -121,13 +123,15 @@ def handle_sql_query(user_query: str, model: str):
 
     # Clean up the response (remove ```sql ... ``` if present)
     generated_sql = response.text.replace("```sql", "").replace("```", "").strip()
-    print(f"\n[DEBUG] Generated SQL: {generated_sql}") # Useful for debugging
+    print(f"\n[DEBUG] Generated SQL: {generated_sql}")  # Useful for debugging
 
     # B. Execute SQL
     cols, results = execute_sql_query(generated_sql)
 
-    if isinstance(results, str): # Error happened
-        return f"I tried to calculate that, but encountered a database error: {results}"
+    # Error path from execute_sql_query
+    if isinstance(results, str):
+        yield f"I tried to calculate that, but encountered a database error: {results}"
+        return
 
     # C. Formulate Answer
     answer_prompt = f"""
@@ -136,8 +140,9 @@ def handle_sql_query(user_query: str, model: str):
     Database Result: {results}
     
     Task: Answer the user's question naturally based on the database result. 
-    If the result is a number, just give the number context.
-    If it is a list of products, list them briefly.
+    - If the result is a number, just give the number context.
+    - If it is a list of products, list them briefly.
+    - If the result is empty, explain that no matching products were found.
     """
 
     # Stream the final answer
@@ -146,9 +151,7 @@ def handle_sql_query(user_query: str, model: str):
     )
     for chunk in stream:
         if chunk.text:
-            print(chunk.text.rstrip(), end="", flush=True)
-    print()
-    return None
+            yield chunk.text
 
 
 # ---------------------------------------------------------
@@ -166,6 +169,7 @@ def route_query(user_query: str, model: str) -> str:
        - Aggregations (average price, max price, sum)
        - Strict Filtering (products under $50, price > 100)
        - Checking stock levels specifically
+       - Any analytical query requiring precise data retrieval
        
     2. "semantic": For questions about:
        - Finding products by description ("comfortable shoes")
@@ -197,34 +201,40 @@ Instructions:
 - Be concise and helpful.
 """
 
-def chat_with_rag(prompt: str, model: str = DEFAULT_MODEL, top_k: int = 5):
+def chat_with_rag_stream(prompt: str, model: str = DEFAULT_MODEL, top_k: int = 5):
     # 1. ROUTER STEP
-    print("Thinking...", end="\r")
     intent = route_query(prompt, model)
 
     if intent == "sql":
-        print(f"[DEBUG] Path: SQL Database Analysis")
-        handle_sql_query(prompt, model)
-    else:
-        print(f"[DEBUG] Path: Semantic Search")
-        # 2. SEMANTIC STEP (Existing Logic)
-        products = retrieve_similar_products(prompt, top_k=top_k)
-        context = build_context(products)
+        # SQL / analytical branch: stream chunks from handle_sql_query
+        for chunk in handle_sql_query(prompt, model):
+            if chunk:
+                yield chunk
+        return
 
-        messages = f"""
-            System Instructions: {SYSTEM_PROMPT}
-            Context Information: {context}
-            User Question: {prompt}
-            Answer:"""
+    # 2. SEMANTIC STEP
+    products = retrieve_similar_products(prompt, top_k=top_k)
+    context = build_context(products)
 
-        stream = gemini_client.models.generate_content_stream(
-            model=model,
-            contents=messages,
-        )
-        for chunk in stream:
-            if chunk.text:
-                print(chunk.text.rstrip(), end="", flush=True)
-        print()
+    messages = f"""
+        System Instructions: {SYSTEM_PROMPT}
+        Context Information: {context}
+        User Question: {prompt}
+        Answer:"""
+
+    stream = gemini_client.models.generate_content_stream(
+        model=model,
+        contents=messages,
+    )
+
+    for chunk in stream:
+        if chunk.text:
+            yield chunk.text
+
+def chat_with_rag(prompt: str, model: str = DEFAULT_MODEL, top_k: int = 5):
+    for text in chat_with_rag_stream(prompt, model=model, top_k=top_k):
+        print(text.rstrip(), end="", flush=True)
+    print()
 
 def main():
     print("RAG-Enhanced Product Chatbot (Router Enabled)")

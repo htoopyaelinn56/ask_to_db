@@ -1,5 +1,6 @@
 from dotenv import load_dotenv
-from telegram import Update
+from telegram.constants import ParseMode
+import telegramify_markdown
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 import os
 
@@ -39,10 +40,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass # Ignore errors like "Message is not modified"
 
     # 4. Final update to remove the cursor and show complete text
+    print(full_response)
     await context.bot.edit_message_text(
         chat_id=update.effective_chat.id,
         message_id=placeholder.message_id,
-        text=full_response
+        text=telegramify_markdown.markdownify(full_response),
+        parse_mode=ParseMode.MARKDOWN_V2
     )
 
 if __name__ == '__main__':

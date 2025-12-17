@@ -165,6 +165,7 @@ def route_query(user_query: str, model: str) -> str:
     You are a router. Classify the user query into one of two categories:
     
     1. "sql": For questions about:
+       - Show me products by brand/category or all products
        - Counting items (how many, total number)
        - Aggregations (average price, max price, sum)
        - Strict Filtering (products under $50, price > 100)
@@ -213,6 +214,7 @@ def chat_with_rag_stream(prompt: str, model: str = DEFAULT_MODEL, top_k: int = 5
         return
 
     # 2. SEMANTIC STEP
+    print(f"\n[DEBUG] SEMANTIC SEARCH")  # Useful for debugging
     products = retrieve_similar_products(prompt, top_k=top_k)
     context = build_context(products)
 

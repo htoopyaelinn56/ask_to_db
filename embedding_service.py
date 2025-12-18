@@ -1,7 +1,10 @@
+import os
+
 from docling.datamodel.accelerator_options import AcceleratorOptions, AcceleratorDevice
 from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import PdfPipelineOptions
 from docling_core.transforms.chunker.tokenizer.huggingface import HuggingFaceTokenizer
+from dotenv import load_dotenv
 from transformers import AutoTokenizer, AutoModel
 import torch
 
@@ -9,7 +12,9 @@ from pathlib import Path
 from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling_core.transforms.chunker import HybridChunker
 
-EMBED_MODEL_ID = "/Volumes/HPLSSD/ai_models/embeddinggemma"
+load_dotenv()
+
+EMBED_MODEL_ID = os.getenv("EMBED_MODEL_ID")
 MAX_TOKENS = 512
 
 _tokenizer = AutoTokenizer.from_pretrained(EMBED_MODEL_ID)

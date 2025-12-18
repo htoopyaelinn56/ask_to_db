@@ -7,6 +7,7 @@ from ai_service import gemini_client, DEFAULT_MODEL
 from db_service import get_connection
 from embedding_service import embed_text
 
+
 # ---------------------------------------------------------
 # 1. HELPER: DATABASE SCHEMA DEFINITION
 # ---------------------------------------------------------
@@ -26,11 +27,13 @@ def get_table_schema():
     - stock_quantity (integer): How many items are available
     """
 
+
 # ---------------------------------------------------------
 # 2. EXISTING SEMANTIC SEARCH LOGIC
 # ---------------------------------------------------------
 def _to_pgvector_literal(vec: list[float]) -> str:
     return "[" + ", ".join(f"{float(x):.6f}" for x in vec) + "]"
+
 
 def retrieve_similar_products(query: str, top_k: int = 5):
     query_vec = embed_text(query)
@@ -41,8 +44,15 @@ def retrieve_similar_products(query: str, top_k: int = 5):
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
             cur.execute(
                 """
-                SELECT id, name, name_mm, description, description_mm,
-                       category, brand, price, stock_quantity,
+                SELECT id,
+                       name,
+                       name_mm,
+                       description,
+                       description_mm,
+                       category,
+                       brand,
+                       price,
+                       stock_quantity,
                        1 - (embedding <=> %s::vector) AS similarity
                 FROM products
                 WHERE embedding IS NOT NULL
@@ -56,7 +66,36 @@ def retrieve_similar_products(query: str, top_k: int = 5):
     finally:
         conn.close()
 
-def build_context(products: list[dict]) -> str:
+# TODO: fix no similar results
+def retrieve_similar_shop_info(query: str, top_k: int = 5):
+    query_vec = embed_text(query)
+    # Ensure this helper function formats the list as '[0.1, 0.2, ...]'
+    vec_literal = _to_pgvector_literal(query_vec)
+
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(
+                """
+                SELECT id,
+                       chunk_index,
+                       chunk_text,
+                       contextualized_text,
+                       -- Calculate cosine similarity (1 - cosine distance)
+                       1 - (embedding <=> %s::vector) AS similarity
+                FROM document_chunks
+                WHERE embedding IS NOT NULL
+                ORDER BY embedding <=> %s::vector ASC
+                    LIMIT %s
+                """,
+                (vec_literal, vec_literal, top_k),
+            )
+            rows = cur.fetchall()
+            return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+def build_context_for_products(products: list[dict]) -> str:
     if not products:
         return "No relevant products found in the database."
 
@@ -67,6 +106,15 @@ def build_context(products: list[dict]) -> str:
         lines.append(f"   - Price: ${p.get('price')}, Stock: {p.get('stock_quantity')}")
         lines.append(f"   - Description: {p.get('description')}")
         lines.append("")
+    return "\n".join(lines)
+
+def build_context_for_shop_info(info_chunks: list[dict]) -> str:
+    if not info_chunks:
+        return "No relevant shop information found."
+
+    lines = ["Here is the relevant shop information:\n"]
+    for idx, chunk in enumerate(info_chunks, start=1):
+        lines.append(f"{idx}. {chunk.get('text')}\n")
     return "\n".join(lines)
 
 # ---------------------------------------------------------
@@ -172,12 +220,16 @@ def route_query(user_query: str, model: str) -> str:
        - Checking stock levels specifically
        - Any analytical query requiring precise data retrieval
        
-    2. "semantic": For questions about:
+    2. "semantic_product": For questions about:
        - Finding products by description ("comfortable shoes")
-       - Features, recommendations, or general info
+       - Features, recommendations, or general info about products
        - "Do you have something like X?"
+       
+    3. "semantic_shop": For questions about:
+        - Shop policies, shipping, returns, store hours
+        - Information other than products in the database
     
-    Return ONLY the word "sql" or "semantic".
+    Return ONLY the word "sql" or "semantic_product" or "semantic_shop".
     
     Query: {user_query}
     Category:
@@ -188,9 +240,14 @@ def route_query(user_query: str, model: str) -> str:
     )
     category = response.text.strip().lower()
 
-    # Fallback to semantic if unsure
-    if "sql" in category: return "sql"
-    return "semantic"
+    # Fallback to semantic_shop if unsure
+    if "sql" in category:
+        return "sql"
+    elif "semantic_product" in category:
+        return "semantic_product"
+    else:
+        return "semantic_shop"
+
 
 # ---------------------------------------------------------
 # 5. MAIN CHATBOT LOGIC
@@ -213,10 +270,13 @@ def chat_with_rag_stream(prompt: str, model: str = DEFAULT_MODEL, top_k: int = 5
                 yield chunk
         return
 
-    # 2. SEMANTIC STEP
-    print(f"\n[DEBUG] SEMANTIC SEARCH")  # Useful for debugging
-    products = retrieve_similar_products(prompt, top_k=top_k)
-    context = build_context(products)
+    # 2. SEMANTIC STEP (For product info or shop info)
+    is_about_shop = (intent == "semantic_shop")
+    print(f"\n[DEBUG] SEMANTIC SEARCH (" + intent + ")")  # Useful for debugging
+    similar = retrieve_similar_shop_info(prompt, top_k=top_k) if is_about_shop else retrieve_similar_products(prompt, top_k=top_k)
+    context = build_context_for_shop_info(similar) if is_about_shop else build_context_for_products(similar)
+
+    print("[DEBUG] Retrieved Context:\n" + context)  # Useful for debugging
 
     messages = f"""
         System Instructions: {SYSTEM_PROMPT}

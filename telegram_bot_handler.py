@@ -37,6 +37,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # Small sleep to respect Telegram's rate limits
                 await asyncio.sleep(0.1)
             except Exception:
+                await context.bot.edit_message_text(
+                    chat_id=update.effective_chat.id,
+                    message_id=placeholder.message_id,
+                    text="Something went wrong... Please try again later."
+                )
                 pass # Ignore errors like "Message is not modified"
 
     # 4. Final update to remove the cursor and show complete text

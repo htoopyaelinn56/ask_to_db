@@ -4,7 +4,7 @@ from decimal import Decimal
 from typing import Optional
 import math
 
-from embedding_service import embed_text
+from embedding_service import embed_text, generate_chunks_for_about_shop
 
 DB_NAME = "rag_test"
 DB_USER = "postgres"
@@ -90,7 +90,7 @@ def _to_pgvector_literal(vec: list[float]) -> str:
 
 # --- Main backfill -----------------------------------------------------------
 
-def set_embeddings(batch_size: int = 50):
+def set_embeddings_for_products(batch_size: int = 50):
     print("Setting up embeddings in the database...")
 
     conn = get_connection()
@@ -176,6 +176,119 @@ def set_embeddings(batch_size: int = 50):
     finally:
         conn.close()
 
+# Flag to ensure we only reset the document_chunks table once per run
+_document_chunks_initialized = False
+
+
+def _init_document_chunks_table(conn):
+    """Ensure pgvector extension and document_chunks table exist, then clear it.
+
+    This runs TRUNCATE so each run of generate_chunks_for_about_shop starts
+    from a clean slate.
+    """
+    with conn.cursor() as cur:
+        # Ensure pgvector extension exists
+        cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+
+        # Create table if it does not exist (idempotent)
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS document_chunks (
+                id SERIAL PRIMARY KEY,
+                chunk_index INTEGER NOT NULL,
+                chunk_text TEXT NOT NULL,
+                contextualized_text TEXT NOT NULL,
+                chunk_tokens INTEGER NOT NULL,
+                contextualized_tokens INTEGER NOT NULL,
+                embedding vector(768),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(chunk_index)
+            );
+            """
+        )
+
+        # Clear existing data so we always have the latest representation
+        cur.execute("TRUNCATE TABLE document_chunks RESTART IDENTITY;")
+
+    conn.commit()
+
+
+def set_embedding_about_shop(chunk_index, chunk_text, ser_txt, txt_tokens, ser_tokens):
+    """Callback used by generate_chunks_for_about_shop to persist each chunk.
+
+    For the first invocation in a run, this will clear the document_chunks
+    table, then insert each chunk with its embedding and token counts.
+    """
+    global _document_chunks_initialized
+
+    conn = get_connection()
+    try:
+        # Initialize table and clear existing rows once per run
+        if not _document_chunks_initialized:
+            _init_document_chunks_table(conn)
+            _document_chunks_initialized = True
+
+        # Compute embedding from contextualized text
+        try:
+            vec = embed_text(ser_txt)
+        except Exception as e:
+            print(f"[WARN] Skipping chunk_index={chunk_index}: embedding failed: {e}")
+            return
+
+        if not isinstance(vec, list) or not vec:
+            print(f"[WARN] Skipping chunk_index={chunk_index}: invalid embedding output")
+            return
+
+        # Enforce dimensionality: truncate or pad to EMBEDDING_DIM
+        if len(vec) < EMBEDDING_DIM:
+            vec = vec + [0.0] * (EMBEDDING_DIM - len(vec))
+        elif len(vec) > EMBEDDING_DIM:
+            vec = vec[:EMBEDDING_DIM]
+
+        vec_literal = _to_pgvector_literal(vec)
+
+        chunk_tokens_count = len(txt_tokens) if txt_tokens is not None else 0
+        ser_tokens_count = len(ser_tokens) if ser_tokens is not None else 0
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO document_chunks (
+                    chunk_index,
+                    chunk_text,
+                    contextualized_text,
+                    chunk_tokens,
+                    contextualized_tokens,
+                    embedding
+                ) VALUES (%s, %s, %s, %s, %s, %s::vector)
+                ON CONFLICT (chunk_index) DO UPDATE SET
+                    chunk_text = EXCLUDED.chunk_text,
+                    contextualized_text = EXCLUDED.contextualized_text,
+                    chunk_tokens = EXCLUDED.chunk_tokens,
+                    contextualized_tokens = EXCLUDED.contextualized_tokens,
+                    embedding = EXCLUDED.embedding
+                """,
+                (
+                    int(chunk_index),
+                    chunk_text,
+                    ser_txt,
+                    int(chunk_tokens_count),
+                    int(ser_tokens_count),
+                    vec_literal,
+                ),
+            )
+
+        conn.commit()
+        print(f"[INFO] Upserted chunk_index={chunk_index}")
+
+    except Exception as e:
+        conn.rollback()
+        print(f"[ERROR] Failed to persist chunk_index={chunk_index}: {e}")
+        raise
+    finally:
+        conn.close()
+
 
 if __name__ == "__main__":
-    set_embeddings(batch_size=50)
+    set_embeddings_for_products(batch_size=50)
+    generate_chunks_for_about_shop(set_embedding_about_shop)

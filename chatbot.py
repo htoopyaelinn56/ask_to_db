@@ -257,7 +257,8 @@ def route_query(user_query: str, model: str) -> str:
 SYSTEM_PROMPT = """You are a helpful product assistant.
 Instructions:
 - Use the provided context to answer.
-- Support both English and Myanmar (Burmese) but answer only in user's query language.
+- Answer in user's question language.
+- Support both English and Myanmar (Burmese).
 - Be concise and helpful.
 """
 

@@ -1,6 +1,6 @@
 # Ask to DB
 
-Simple demo app that lets you chat with a product database using AI and embeddings.
+Simple demo app that lets you chat with a product database and [about shop](about_shop.md) using AI and embeddings.
 
 ## Prerequisites
 

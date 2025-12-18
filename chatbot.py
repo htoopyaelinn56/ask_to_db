@@ -1,7 +1,5 @@
 import psycopg2
 import psycopg2.extras
-import json
-import re
 
 from ai_service import gemini_client, DEFAULT_MODEL
 from db_service import get_connection
@@ -66,7 +64,6 @@ def retrieve_similar_products(query: str, top_k: int = 5):
     finally:
         conn.close()
 
-# TODO: fix no similar results
 def retrieve_similar_shop_info(query: str, top_k: int = 5):
     query_vec = embed_text(query)
     # Ensure this helper function formats the list as '[0.1, 0.2, ...]'
@@ -114,7 +111,12 @@ def build_context_for_shop_info(info_chunks: list[dict]) -> str:
 
     lines = ["Here is the relevant shop information:\n"]
     for idx, chunk in enumerate(info_chunks, start=1):
-        lines.append(f"{idx}. {chunk.get('text')}\n")
+        # The rows from `document_chunks` use the column names `contextualized_text` and `chunk_text`.
+        # Older code used `text` which is not present in the query results and caused empty context.
+        text = chunk.get('contextualized_text') or chunk.get('chunk_text') or chunk.get('text') or ""
+        # Keep a concise single-line entry per chunk
+        lines.append(f"{idx}. {text}")
+        lines.append("")
     return "\n".join(lines)
 
 # ---------------------------------------------------------
@@ -255,7 +257,7 @@ def route_query(user_query: str, model: str) -> str:
 SYSTEM_PROMPT = """You are a helpful product assistant.
 Instructions:
 - Use the provided context to answer.
-- Support both English and Myanmar (Burmese).
+- Support both English and Myanmar (Burmese) but answer only in user's query language.
 - Be concise and helpful.
 """
 
@@ -276,7 +278,6 @@ def chat_with_rag_stream(prompt: str, model: str = DEFAULT_MODEL, top_k: int = 5
     similar = retrieve_similar_shop_info(prompt, top_k=top_k) if is_about_shop else retrieve_similar_products(prompt, top_k=top_k)
     context = build_context_for_shop_info(similar) if is_about_shop else build_context_for_products(similar)
 
-    print("[DEBUG] Retrieved Context:\n" + context)  # Useful for debugging
 
     messages = f"""
         System Instructions: {SYSTEM_PROMPT}

@@ -91,7 +91,7 @@ def _to_pgvector_literal(vec: list[float]) -> str:
 # --- Main backfill -----------------------------------------------------------
 
 def set_embeddings_for_products(batch_size: int = 50):
-    print("Setting up embeddings in the database...")
+    print("Setting up embeddings for ALL products (Forced Update)...")
 
     conn = get_connection()
     try:
@@ -101,23 +101,23 @@ def set_embeddings_for_products(batch_size: int = 50):
             conn.commit()
 
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            # CHANGE 1: Removed "WHERE serialized_text IS NULL..."
+            # We fetch all products to ensure everything is up to date.
             cur.execute(
                 """
                 SELECT id, name, name_mm, description, description_mm,
-                       category, brand, price, stock_quantity, serialized_text, embedding
+                       category, brand, price, stock_quantity
                 FROM products
-                WHERE serialized_text IS NULL OR embedding IS NULL
                 ORDER BY id ASC
                 """
             )
             rows = cur.fetchall()
 
         if not rows:
-            print("No rows need updates. serialized_text and embedding are already populated.")
-            conn.commit()
+            print("No products found in the database.")
             return
 
-        print(f"Found {len(rows)} product(s) to update.")
+        print(f"Found {len(rows)} product(s) to process.")
 
         updated = 0
         with conn.cursor() as cur:  # simple cursor for updates
@@ -125,9 +125,10 @@ def set_embeddings_for_products(batch_size: int = 50):
                 # DictRow behaves like dict
                 row_dict = dict(row)
 
-                text = row_dict.get("serialized_text")
-                if not text or not text.strip():
-                    text = build_serialized_text(row_dict)
+                # CHANGE 2: Always rebuild the text.
+                # Since we want to update embeddings based on potential data changes,
+                # we must regenerate the text from the current column values.
+                text = build_serialized_text(row_dict)
 
                 try:
                     vec = embed_text(text)
@@ -147,7 +148,7 @@ def set_embeddings_for_products(batch_size: int = 50):
 
                 vec_literal = _to_pgvector_literal(vec)
 
-                # Update both fields to keep them consistent
+                # Update both fields
                 cur.execute(
                     """
                     UPDATE products
@@ -171,7 +172,7 @@ def set_embeddings_for_products(batch_size: int = 50):
 
     except Exception as e:
         conn.rollback()
-        print(f"[ERROR] Backfill failed and was rolled back: {e}")
+        print(f"[ERROR] Update failed and was rolled back: {e}")
         raise
     finally:
         conn.close()

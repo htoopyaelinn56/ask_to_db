@@ -226,14 +226,15 @@ def route_and_decompose_query(user_query: str, model: str) -> list[dict]:
 # 5. MAIN CHATBOT LOGIC (The Synthesizer)
 # ---------------------------------------------------------
 
+
 SYSTEM_PROMPT = """You are a helpful product assistant.
 Instructions:
 - Use the provided context to answer.
 - Answer ONLY in Myanmar (Burmese) language.
 - You can keep Product names, brand names, and technical terms in English.
 - If multiple pieces of information are requested, combine them into one smooth response.
+- **IMPORTANT: If the user ask about stock or availability, just say in stock or out of stock, don't say exact stock number.**
 """
-
 def chat_with_rag_stream(prompt: str, model: str = DEFAULT_MODEL, top_k: int = 5):
     # 1. DECOMPOSE
     sub_tasks = route_and_decompose_query(prompt, model)

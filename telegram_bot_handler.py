@@ -22,27 +22,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 2. Iterate through your RAG generator
     # Assuming chat_with_rag_stream is defined as discussed previously
-    for chunk in chat_with_rag_stream(user_text):
-        full_response += chunk
-        chunk_counter += 1
+    try:
+        for chunk in chat_with_rag_stream(user_text):
+            full_response += chunk
+            chunk_counter += 1
 
-        # 3. Update the message every 15 chunks to avoid rate limits
-        if chunk_counter % 15 == 0:
-            try:
-                await context.bot.edit_message_text(
-                    chat_id=update.effective_chat.id,
-                    message_id=placeholder.message_id,
-                    text=full_response + " " # Visual cursor
-                )
-                # Small sleep to respect Telegram's rate limits
-                await asyncio.sleep(0.1)
-            except Exception:
-                await context.bot.edit_message_text(
-                    chat_id=update.effective_chat.id,
-                    message_id=placeholder.message_id,
-                    text="Something went wrong... Please try again later."
-                )
-                pass # Ignore errors like "Message is not modified"
+            # 3. Update the message every 15 chunks to avoid rate limits
+            if chunk_counter % 15 == 0:
+                try:
+                    await context.bot.edit_message_text(
+                        chat_id=update.effective_chat.id,
+                        message_id=placeholder.message_id,
+                        text=full_response + " " # Visual cursor
+                    )
+                    # Small sleep to respect Telegram's rate limits
+                    await asyncio.sleep(0.1)
+                except Exception:
+                    pass # Ignore errors like "Message is not modified"
+    # catch errors from the RAG generator
+    except Exception as e:
+        await context.bot.edit_message_text(
+            chat_id=update.effective_chat.id,
+            message_id=placeholder.message_id,
+            text="An error occurred while processing your request. Please try again later."
+        )
+        return
 
     # 4. Final update to remove the cursor and show complete text
     print(full_response)

@@ -226,6 +226,7 @@ def route_query(user_query: str, model: str) -> str:
        - Finding products by description ("comfortable shoes")
        - Features, recommendations, or general info about products
        - "Do you have something like X?"
+       - "I want to buy x and ....."
        
     3. "semantic_shop": For questions about:
         - Shop policies, shipping, returns, store hours
@@ -257,8 +258,8 @@ def route_query(user_query: str, model: str) -> str:
 SYSTEM_PROMPT = """You are a helpful product assistant.
 Instructions:
 - Use the provided context to answer.
-- Answer in user's question language.
-- Support both English and Myanmar (Burmese).
+- Support both English and Myanmar (Burmese) but answer only in Myanmar (Burmese) language but you can use
+  some words which are not in Burmese Language like Product names, brand names etc in English language.
 - Be concise and helpful.
 """
 

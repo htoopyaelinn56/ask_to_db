@@ -1,16 +1,16 @@
+import json
+import traceback
+
 import psycopg2
 import psycopg2.extras
-
 from ai_service import gemini_client, DEFAULT_MODEL
 from db_service import get_connection
 from embedding_service import embed_text
 
-
 # ---------------------------------------------------------
-# 1. HELPER: DATABASE SCHEMA DEFINITION
+# 1. DATABASE SCHEMA & HELPERS
 # ---------------------------------------------------------
 def get_table_schema():
-    """Returns the schema representation for the LLM to understand the DB structure."""
     return """
     Table: products
     Columns:
@@ -25,18 +25,32 @@ def get_table_schema():
     - stock_quantity (integer): How many items are available
     """
 
-
-# ---------------------------------------------------------
-# 2. EXISTING SEMANTIC SEARCH LOGIC
-# ---------------------------------------------------------
 def _to_pgvector_literal(vec: list[float]) -> str:
     return "[" + ", ".join(f"{float(x):.6f}" for x in vec) + "]"
 
+# ---------------------------------------------------------
+# 2. DATA RETRIEVAL FUNCTIONS
+# ---------------------------------------------------------
+
+def execute_sql_query(sql_query: str):
+    """Executes a generated SQL query safely."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql_query)
+            if cur.description:
+                columns = [desc[0] for desc in cur.description]
+                results = cur.fetchall()
+                return columns, results
+            return None, None
+    except Exception as e:
+        return None, str(e)
+    finally:
+        conn.close()
 
 def retrieve_similar_products(query: str, top_k: int = 5):
     query_vec = embed_text(query)
     vec_literal = _to_pgvector_literal(query_vec)
-
     conn = get_connection()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
@@ -59,16 +73,13 @@ def retrieve_similar_products(query: str, top_k: int = 5):
                 """,
                 (vec_literal, vec_literal, top_k),
             )
-            rows = cur.fetchall()
-            return [dict(row) for row in rows]
+            return [dict(row) for row in cur.fetchall()]
     finally:
         conn.close()
 
 def retrieve_similar_shop_info(query: str, top_k: int = 5):
     query_vec = embed_text(query)
-    # Ensure this helper function formats the list as '[0.1, 0.2, ...]'
     vec_literal = _to_pgvector_literal(query_vec)
-
     conn = get_connection()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
@@ -91,6 +102,10 @@ def retrieve_similar_shop_info(query: str, top_k: int = 5):
             return [dict(row) for row in rows]
     finally:
         conn.close()
+
+# ---------------------------------------------------------
+# 3. CONTEXT BUILDERS
+# ---------------------------------------------------------
 
 def build_context_for_products(products: list[dict]) -> str:
     if not products:
@@ -119,36 +134,9 @@ def build_context_for_shop_info(info_chunks: list[dict]) -> str:
         lines.append("")
     return "\n".join(lines)
 
-# ---------------------------------------------------------
-# 3. NEW: SQL QUERY LOGIC (For Counts, Averages, Filters)
-# ---------------------------------------------------------
-def execute_sql_query(sql_query: str):
-    """Executes a generated SQL query safely."""
-    conn = get_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(sql_query)
-            # Fetch results (handle case where query returns nothing)
-            if cur.description:
-                columns = [desc[0] for desc in cur.description]
-                results = cur.fetchall()
-                return columns, results
-            return None, None
-    except Exception as e:
-        return None, str(e)
-    finally:
-        conn.close()
-
-def handle_sql_query(user_query: str, model: str):
-    """Generator that:
-    1. Generates SQL based on user question.
-    2. Runs SQL.
-    3. Streams a synthesized natural-language answer.
-    Yields text chunks suitable for streaming to the client.
-    """
+def get_sql_data_context(sub_query: str, model: str) -> str:
+    """Generates SQL and returns the raw result as context string."""
     schema = get_table_schema()
-
-    # A. Generate SQL
     sql_prompt = f"""
     You are a SQL expert. Convert the user question into a standard PostgreSQL query.
     
@@ -163,57 +151,29 @@ def handle_sql_query(user_query: str, model: str):
     6. Only Select name column when listing products.
     7. Make sure the SQL is valid PostgreSQL and references only existing columns.
     
-    User Question: {user_query}
+    User Question: {sub_query}
     SQL:
     """
 
-    response = gemini_client.models.generate_content(
-        model=model, contents=sql_prompt
-    )
-
-    # Clean up the response (remove ```sql ... ``` if present)
+    response = gemini_client.models.generate_content(model=model, contents=sql_prompt)
     generated_sql = response.text.replace("```sql", "").replace("```", "").strip()
-    print(f"\n[DEBUG] Generated SQL: {generated_sql}")  # Useful for debugging
 
-    # B. Execute SQL
     cols, results = execute_sql_query(generated_sql)
-
-    # Error path from execute_sql_query
     if isinstance(results, str):
-        yield f"I tried to calculate that, but encountered a database error: {results}"
-        return
-
-    # C. Formulate Answer
-    answer_prompt = f"""
-    User Question: {user_query}
-    SQL Used: {generated_sql}
-    Database Result: {results}
-    
-    Task: Answer the user's question naturally based on the database result. 
-    - If the result is a number, just give the number context.
-    - If it is a list of products, list them briefly.
-    - If the result is empty, explain that no matching products were found.
-    """
-
-    # Stream the final answer
-    stream = gemini_client.models.generate_content_stream(
-        model=model, contents=answer_prompt
-    )
-    for chunk in stream:
-        if chunk.text:
-            yield chunk.text
-
+        return f"Database data could not be retrieved. Error: {results}"
+    return f"Analytical Data (from query {generated_sql}): {results}"
 
 # ---------------------------------------------------------
-# 4. NEW: ROUTER LOGIC
+# 4. ROUTER & DECOMPOSER (Option 2 Implementation)
 # ---------------------------------------------------------
-def route_query(user_query: str, model: str) -> str:
+
+def route_and_decompose_query(user_query: str, model: str) -> list[dict]:
     """
-    Decides if the query needs 'semantic' search or 'sql' aggregation.
+    Analyzes the query and breaks it into sub-tasks with specific intents.
     """
     router_prompt = f"""
-    You are a router. Classify the user query into one of two categories:
-    
+    You are an intelligent query router. Break the user query into independent sub-tasks.
+    Assign one intent to each sub-task: 
     1. "sql": For questions about:
        - Show me products by brand/category or all products
        - Counting items (how many, total number)
@@ -231,67 +191,81 @@ def route_query(user_query: str, model: str) -> str:
     3. "semantic_shop": For questions about:
         - Shop policies, shipping, returns, store hours
         - Information other than products in the database
+
+    Return ONLY a JSON list of objects.
+    Example: 
+    Query: "Show me shoes under $50 and do you have free shipping?"
+    Output: [
+      {{"sub_query": "products under 50 dollars", "intent": "sql"}},
+      {{"sub_query": "free shipping policy", "intent": "semantic_shop"}}
+    ]
     
-    Return ONLY the word "sql" or "semantic_product" or "semantic_shop".
-    
-    Query: {user_query}
-    Category:
+    Example: 
+    Query: "hi, is there iPhone in stock, explain about it if available and where is the shop located"
+    Output: [
+      {{"sub_query": "iPhone stock available", "intent": "sql"}},
+      {{"sub_query": "about iPhone", "intent": "semantic_product"}},
+      {{"sub_query": "shop address", "intent": "semantic_shop"}},
+    ]
+
+    User Query: {user_query}
+    Output:
     """
 
     response = gemini_client.models.generate_content(
-        model=model, contents=router_prompt
+        model=model,
+        contents=router_prompt,
     )
-    category = response.text.strip().lower()
-
-    # Fallback to semantic_shop if unsure
-    if "sql" in category:
-        return "sql"
-    elif "semantic_product" in category:
-        return "semantic_product"
-    else:
-        return "semantic_shop"
-
+    print("[DEBUG] Router Response:", response.text)
+    try:
+        return json.loads(response.text.replace("```json", "").replace("```", "").strip())
+    except:
+        return [{"sub_query": user_query, "intent": "semantic_shop"}]
 
 # ---------------------------------------------------------
-# 5. MAIN CHATBOT LOGIC
+# 5. MAIN CHATBOT LOGIC (The Synthesizer)
 # ---------------------------------------------------------
+
 SYSTEM_PROMPT = """You are a helpful product assistant.
 Instructions:
 - Use the provided context to answer.
-- Support both English and Myanmar (Burmese) but answer only in Myanmar (Burmese) language but you can use
-  some words which are not in Burmese Language like Product names, brand names etc in English language.
-- Be concise and helpful.
+- Answer ONLY in Myanmar (Burmese) language.
+- You can keep Product names, brand names, and technical terms in English.
+- If multiple pieces of information are requested, combine them into one smooth response.
 """
 
 def chat_with_rag_stream(prompt: str, model: str = DEFAULT_MODEL, top_k: int = 5):
-    # 1. ROUTER STEP
-    intent = route_query(prompt, model)
+    # 1. DECOMPOSE
+    sub_tasks = route_and_decompose_query(prompt, model)
+    print(f"\n[DEBUG] Intent Decomposition: {sub_tasks}")
 
-    if intent == "sql":
-        # SQL / analytical branch: stream chunks from handle_sql_query
-        for chunk in handle_sql_query(prompt, model):
-            if chunk:
-                yield chunk
-        return
+    # 2. RETRIEVE DATA FOR EACH TASK
+    combined_contexts = []
+    for task in sub_tasks:
+        intent = task.get('intent')
+        sub_q = task.get('sub_query')
 
-    # 2. SEMANTIC STEP (For product info or shop info)
-    is_about_shop = (intent == "semantic_shop")
-    print(f"\n[DEBUG] SEMANTIC SEARCH (" + intent + ")")  # Useful for debugging
-    similar = retrieve_similar_shop_info(prompt, top_k=top_k) if is_about_shop else retrieve_similar_products(prompt, top_k=top_k)
-    context = build_context_for_shop_info(similar) if is_about_shop else build_context_for_products(similar)
+        if intent == "sql":
+            combined_contexts.append(get_sql_data_context(sub_q, model))
+        elif intent == "semantic_product":
+            similar = retrieve_similar_products(sub_q, top_k=top_k)
+            combined_contexts.append(build_context_for_products(similar))
+        elif intent == "semantic_shop":
+            similar = retrieve_similar_shop_info(sub_q, top_k=top_k)
+            combined_contexts.append(build_context_for_shop_info(similar))
 
+    # 3. SYNTHESIZE & STREAM
+    full_context = "\n\n".join(combined_contexts)
+    final_input = f"""
+    System Instructions: {SYSTEM_PROMPT}
+    Gathered Context:
+    {full_context}
+    
+    User Question: {prompt}
+    Answer (in Myanmar):
+    """
 
-    messages = f"""
-        System Instructions: {SYSTEM_PROMPT}
-        Context Information: {context}
-        User Question: {prompt}
-        Answer:"""
-
-    stream = gemini_client.models.generate_content_stream(
-        model=model,
-        contents=messages,
-    )
-
+    stream = gemini_client.models.generate_content_stream(model=model, contents=final_input)
     for chunk in stream:
         if chunk.text:
             yield chunk.text
@@ -302,31 +276,18 @@ def chat_with_rag(prompt: str, model: str = DEFAULT_MODEL, top_k: int = 5):
     print()
 
 def main():
-    print("RAG-Enhanced Product Chatbot (Router Enabled)")
-    print("Examples:")
-    print(" - Semantic: 'Find me a comfortable running shoe'")
-    print(" - SQL: 'How many Nike products do we have?' or 'Show items under $50'")
-    print("Commands: /exit, /quit\n")
-
+    print("RAG Hybrid Chatbot (SQL + Vector + Shop Info)")
+    print("Commands: exit, quit\n")
     model = DEFAULT_MODEL
     while True:
-        print()
         try:
-            user_input = input("> ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\nExiting.")
-            break
-
-        if not user_input:
-            continue
-        if user_input.lower() in {"/exit", "exit", "quit", "/quit"}:
-            print("Goodbye.")
-            break
-
-        try:
+            user_input = input("\n> ").strip()
+            if not user_input: continue
+            if user_input.lower() in {"exit", "quit"}: break
             chat_with_rag(user_input, model=model)
         except Exception as e:
-            print(f"[ERROR] Chat failed: {e}")
+            print(f"[ERROR] {e}")
+            traceback.print_exc()
 
 if __name__ == "__main__":
     main()

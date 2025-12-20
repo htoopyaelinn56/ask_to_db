@@ -176,12 +176,16 @@ def get_sql_data_context(sub_query: str, model: str) -> str:
 # 4. ROUTER & DECOMPOSER (Option 2 Implementation)
 # ---------------------------------------------------------
 
-def route_and_decompose_query(user_query: str, model: str) -> list[dict]:
+def route_and_decompose_query(user_query: str, previous_context: str, model: str) -> list[dict]:
     """
     Analyzes the query and breaks it into sub-tasks with specific intents.
     """
     router_prompt = f"""
     You are an intelligent query router. Break the user query into independent sub-tasks.
+    Also reference and consider the previous conversation context if relevant.
+    If the question is vague, try to infer the user's intent based on the previous context as provided below.
+    Previous Context: {previous_context}
+    
     Assign one intent to each sub-task: 
     1. "sql": For questions about:
        - Show me products by brand/category or all products
@@ -232,6 +236,8 @@ def route_and_decompose_query(user_query: str, model: str) -> list[dict]:
     Output:
     """
 
+    print("[DEBUG] Router Prompt:", router_prompt)
+
     response = gemini_client.models.generate_content(
         model=model,
         contents=router_prompt,
@@ -260,9 +266,8 @@ Instructions:
 
 def chat_with_rag_stream(prompt: str, previous_message: str, model: str = DEFAULT_MODEL, top_k: int = 5):
     # 1. DECOMPOSE
-    prompt = f"{previous_message}\nCurrent Prompt: {prompt}"
     print("[DEBUG] Full Prompt for Decomposition:", prompt)
-    sub_tasks = route_and_decompose_query(prompt, model)
+    sub_tasks = route_and_decompose_query(prompt, previous_message, model)
 
     # 2. RETRIEVE DATA FOR EACH TASK
     combined_contexts = []

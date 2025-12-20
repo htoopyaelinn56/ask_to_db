@@ -4,12 +4,16 @@ import telegramify_markdown
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 import os
 
+from chat_memory_service import ChatMemoryService
 from chatbot import chat_with_rag_stream
 
 load_dotenv()
 import asyncio
 from telegram import Update
 from telegram.ext import ContextTypes
+
+chat_memory_service = ChatMemoryService()
+
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
@@ -23,7 +27,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 2. Iterate through your RAG generator
     # Assuming chat_with_rag_stream is defined as discussed previously
     try:
-        for chunk in chat_with_rag_stream(user_text):
+        for chunk in chat_with_rag_stream(prompt=user_text, previous_message=chat_memory_service.get_memory_for_user(
+                update.effective_chat.id).to_string()):
             full_response += chunk
             chunk_counter += 1
 
@@ -33,12 +38,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await context.bot.edit_message_text(
                         chat_id=update.effective_chat.id,
                         message_id=placeholder.message_id,
-                        text=full_response + " " # Visual cursor
+                        text=full_response + " "  # Visual cursor
                     )
                     # Small sleep to respect Telegram's rate limits
                     await asyncio.sleep(0.1)
                 except Exception:
-                    pass # Ignore errors like "Message is not modified"
+                    pass  # Ignore errors like "Message is not modified"
     # catch errors from the RAG generator
     except Exception as e:
         await context.bot.edit_message_text(
@@ -50,12 +55,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 4. Final update to remove the cursor and show complete text
     print(full_response)
+    chat_memory_service.add_user_message(update.effective_chat.id, user_text)
+    chat_memory_service.add_bot_message(update.effective_chat.id, full_response)
     await context.bot.edit_message_text(
         chat_id=update.effective_chat.id,
         message_id=placeholder.message_id,
         text=telegramify_markdown.markdownify(full_response),
         parse_mode=ParseMode.MARKDOWN_V2
     )
+
 
 if __name__ == '__main__':
     # Replace 'YOUR_TOKEN_HERE' with the token from BotFather

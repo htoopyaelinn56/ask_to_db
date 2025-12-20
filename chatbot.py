@@ -7,6 +7,7 @@ from ai_service import gemini_client, DEFAULT_MODEL
 from db_service import get_connection
 from embedding_service import embed_text
 
+
 # ---------------------------------------------------------
 # 1. DATABASE SCHEMA & HELPERS
 # ---------------------------------------------------------
@@ -25,8 +26,10 @@ def get_table_schema():
     - stock_quantity (integer): How many items are available
     """
 
+
 def _to_pgvector_literal(vec: list[float]) -> str:
     return "[" + ", ".join(f"{float(x):.6f}" for x in vec) + "]"
+
 
 # ---------------------------------------------------------
 # 2. DATA RETRIEVAL FUNCTIONS
@@ -47,6 +50,7 @@ def execute_sql_query(sql_query: str):
         return None, str(e)
     finally:
         conn.close()
+
 
 def retrieve_similar_products(query: str, top_k: int = 5):
     query_vec = embed_text(query)
@@ -77,6 +81,7 @@ def retrieve_similar_products(query: str, top_k: int = 5):
     finally:
         conn.close()
 
+
 def retrieve_similar_shop_info(query: str, top_k: int = 5):
     query_vec = embed_text(query)
     vec_literal = _to_pgvector_literal(query_vec)
@@ -103,6 +108,7 @@ def retrieve_similar_shop_info(query: str, top_k: int = 5):
     finally:
         conn.close()
 
+
 # ---------------------------------------------------------
 # 3. CONTEXT BUILDERS
 # ---------------------------------------------------------
@@ -120,6 +126,7 @@ def build_context_for_products(products: list[dict]) -> str:
         lines.append("")
     return "\n".join(lines)
 
+
 def build_context_for_shop_info(info_chunks: list[dict]) -> str:
     if not info_chunks:
         return "No relevant shop information found."
@@ -133,6 +140,7 @@ def build_context_for_shop_info(info_chunks: list[dict]) -> str:
         lines.append(f"{idx}. {text}")
         lines.append("")
     return "\n".join(lines)
+
 
 def get_sql_data_context(sub_query: str, model: str) -> str:
     """Generates SQL and returns the raw result as context string."""
@@ -162,6 +170,7 @@ def get_sql_data_context(sub_query: str, model: str) -> str:
     if isinstance(results, str):
         return f"Database data could not be retrieved. Error: {results}"
     return f"Analytical Data (from query {generated_sql}): {results}"
+
 
 # ---------------------------------------------------------
 # 4. ROUTER & DECOMPOSER (Option 2 Implementation)
@@ -233,6 +242,7 @@ def route_and_decompose_query(user_query: str, model: str) -> list[dict]:
     except:
         return [{"sub_query": user_query, "intent": "semantic_shop"}]
 
+
 # ---------------------------------------------------------
 # 5. MAIN CHATBOT LOGIC (The Synthesizer)
 # ---------------------------------------------------------
@@ -246,10 +256,13 @@ Instructions:
 - If multiple pieces of information are requested, combine them into one smooth response.
 - **IMPORTANT: If the user ask about stock or availability, just say in stock or out of stock, don't say exact stock number.**
 """
-def chat_with_rag_stream(prompt: str, model: str = DEFAULT_MODEL, top_k: int = 5):
+
+
+def chat_with_rag_stream(prompt: str, previous_message: str, model: str = DEFAULT_MODEL, top_k: int = 5):
     # 1. DECOMPOSE
+    prompt = f"{previous_message}\nCurrent Prompt: {prompt}"
+    print("[DEBUG] Full Prompt for Decomposition:", prompt)
     sub_tasks = route_and_decompose_query(prompt, model)
-    print(f"\n[DEBUG] Intent Decomposition: {sub_tasks}")
 
     # 2. RETRIEVE DATA FOR EACH TASK
     combined_contexts = []
@@ -282,10 +295,12 @@ def chat_with_rag_stream(prompt: str, model: str = DEFAULT_MODEL, top_k: int = 5
         if chunk.text:
             yield chunk.text
 
-def chat_with_rag(prompt: str, model: str = DEFAULT_MODEL, top_k: int = 5):
-    for text in chat_with_rag_stream(prompt, model=model, top_k=top_k):
+
+def chat_with_rag(prompt: str, previous_message: str, model: str = DEFAULT_MODEL, top_k: int = 5):
+    for text in chat_with_rag_stream(prompt=prompt, previous_message=previous_message, model=model, top_k=top_k):
         print(text.rstrip(), end="", flush=True)
     print()
+
 
 def main():
     print("RAG Hybrid Chatbot (SQL + Vector + Shop Info)")
@@ -296,10 +311,11 @@ def main():
             user_input = input("\n> ").strip()
             if not user_input: continue
             if user_input.lower() in {"exit", "quit"}: break
-            chat_with_rag(user_input, model=model)
+            chat_with_rag(prompt=user_input, previous_message="", model=model)
         except Exception as e:
             print(f"[ERROR] {e}")
             traceback.print_exc()
+
 
 if __name__ == "__main__":
     main()

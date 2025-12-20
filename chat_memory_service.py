@@ -21,11 +21,11 @@ class ChatMemory:
     def to_string(self) -> str:
         if not self.user_message and not self.bot_message:
             return ""
-        parts = ["Chat Memory (2 previous message):"]
+        parts = []
         if self.user_message:
-            parts.append(f"User: {self.user_message}")
+            parts.append(f"{self.user_message}")
         if self.bot_message:
-            parts.append(f"Bot: {self.bot_message}")
+            parts.append(f"{self.bot_message}")
         return "\n".join(parts)
 
 

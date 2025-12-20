@@ -182,9 +182,9 @@ def route_and_decompose_query(user_query: str, previous_context: str, model: str
     """
     router_prompt = f"""
     You are an intelligent query router. Break the user query into independent sub-tasks.
-    Also reference and consider the previous conversation context if relevant.
+    Also reference and consider the previous conversation context if relevant and previous conversation is not None.
     If the question is vague, try to infer the user's intent based on the previous context as provided below.
-    Previous Context: {previous_context}
+    Previous Context: {previous_context if previous_context else "None"}
     
     Assign one intent to each sub-task: 
     1. "sql": For questions about:
@@ -207,6 +207,10 @@ def route_and_decompose_query(user_query: str, previous_context: str, model: str
         
     ** If the user asks for products, check in both vector database and postgres which means
        query in both sql and semantic_product to handle cases where user typo is wrong or inaccurate. **
+       
+    ** If the user asks for products in given list, explain them all, if the user gives the position
+       of the position example first one, second one, or nth product, infer that product and return
+       sql or semantic_product. **
 
     Return ONLY a JSON list of objects.
     Example: 
@@ -260,6 +264,9 @@ Instructions:
 - Answer ONLY in Myanmar (Burmese) language.
 - You can keep Product names, brand names, and technical terms in English.
 - If multiple pieces of information are requested, combine them into one smooth response.
+- If the user asks for products in given list, explain them all, if the user gives the position
+  of the position example first one, second one, or nth product, infer that product from previous 
+  context and return sql or semantic_product.
 - **IMPORTANT: If the user ask about stock or availability, just say in stock or out of stock, don't say exact stock number.**
 """
 
@@ -291,9 +298,12 @@ def chat_with_rag_stream(prompt: str, previous_message: str, model: str = DEFAUL
     Gathered Context:
     {full_context}
     
+    Previous Context: {previous_message if previous_message else "None"}
     User Question: {prompt}
     Answer (in Myanmar):
     """
+
+    print("[DEBUG] Final Input to LLM:", final_input)
 
     stream = gemini_client.models.generate_content_stream(model=model, contents=final_input)
     for chunk in stream:

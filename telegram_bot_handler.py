@@ -54,7 +54,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # 4. Final update to remove the cursor and show complete text
-    print(full_response)
+    print("[DEBUG] Full response to Telegram Bot:", full_response)
     chat_memory_service.add_user_message(update.effective_chat.id, user_text)
     chat_memory_service.add_bot_message(update.effective_chat.id, full_response)
     await context.bot.edit_message_text(

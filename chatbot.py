@@ -210,6 +210,14 @@ def route_and_decompose_query(user_query: str, model: str) -> list[dict]:
       {{"sub_query": "about iPhone", "intent": "semantic_product"}},
       {{"sub_query": "shop address", "intent": "semantic_shop"}},
     ]
+    
+     Example: 
+     Query: "is there Toner alpha in stock and can I come to shop?"
+     Output: [
+      {{"sub_query": "Toner alpha available", "intent": "sql"}},
+      {{"sub_query": "Toner alpha description", "intent": "semantic_product"}},
+      {{"sub_query": "shop address", "intent": "semantic_shop"}},
+     ]
 
     User Query: {user_query}
     Output:

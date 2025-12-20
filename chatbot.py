@@ -191,6 +191,9 @@ def route_and_decompose_query(user_query: str, model: str) -> list[dict]:
     3. "semantic_shop": For questions about:
         - Shop policies, shipping, returns, store hours
         - Information other than products in the database
+        
+    ** If the user asks for products, check in both vector database and postgres which means
+       query in both sql and semantic_product to handle cases where user typo is wrong or inaccurate. **
 
     Return ONLY a JSON list of objects.
     Example: 

@@ -3,10 +3,13 @@ import traceback
 
 import psycopg2
 import psycopg2.extras
-from ai_service import gemini_client, DEFAULT_MODEL
+
+from ai_service.base_ai_service import BaseAIService
+from ai_service.gemini_ai_service import GeminiAIService
 from db_service import get_connection
 from embedding_service import embed_text
 
+ai_service: BaseAIService = GeminiAIService()
 
 # ---------------------------------------------------------
 # 1. DATABASE SCHEMA & HELPERS
@@ -142,7 +145,7 @@ def build_context_for_shop_info(info_chunks: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def get_sql_data_context(sub_query: str, model: str) -> str:
+def get_sql_data_context(sub_query: str) -> str:
     """Generates SQL and returns the raw result as context string."""
     schema = get_table_schema()
     sql_prompt = f"""
@@ -163,8 +166,8 @@ def get_sql_data_context(sub_query: str, model: str) -> str:
     SQL:
     """
 
-    response = gemini_client.models.generate_content(model=model, contents=sql_prompt)
-    generated_sql = response.text.replace("```sql", "").replace("```", "").strip()
+    response = ai_service.generate_content(prompt=sql_prompt)
+    generated_sql = response.replace("```sql", "").replace("```", "").strip()
 
     cols, results = execute_sql_query(generated_sql)
     if isinstance(results, str):
@@ -176,7 +179,7 @@ def get_sql_data_context(sub_query: str, model: str) -> str:
 # 4. ROUTER & DECOMPOSER (Option 2 Implementation)
 # ---------------------------------------------------------
 
-def route_and_decompose_query(user_query: str, previous_context: str, model: str) -> list[dict]:
+def route_and_decompose_query(user_query: str, previous_context: str) -> list[dict]:
     """
     Analyzes the query and breaks it into sub-tasks with specific intents.
     """
@@ -242,13 +245,12 @@ def route_and_decompose_query(user_query: str, previous_context: str, model: str
 
     print("[DEBUG] Router Prompt:", router_prompt)
 
-    response = gemini_client.models.generate_content(
-        model=model,
-        contents=router_prompt,
+    response = ai_service.generate_content(
+        prompt=router_prompt,
     )
-    print("[DEBUG] Router Response:", response.text)
+    print("[DEBUG] Router Response:", response)
     try:
-        return json.loads(response.text.replace("```json", "").replace("```", "").strip())
+        return json.loads(response.replace("```json", "").replace("```", "").strip())
     except:
         return [{"sub_query": user_query, "intent": "semantic_shop"}]
 
@@ -271,10 +273,10 @@ Instructions:
 """
 
 
-def chat_with_rag_stream(prompt: str, previous_message: str, model: str = DEFAULT_MODEL, top_k: int = 5):
+def chat_with_rag_stream(prompt: str, previous_message: str, top_k: int = 5):
     # 1. DECOMPOSE
     print("[DEBUG] Full Prompt for Decomposition:", prompt)
-    sub_tasks = route_and_decompose_query(prompt, previous_message, model)
+    sub_tasks = route_and_decompose_query(prompt, previous_message)
 
     # 2. RETRIEVE DATA FOR EACH TASK
     combined_contexts = []
@@ -283,7 +285,7 @@ def chat_with_rag_stream(prompt: str, previous_message: str, model: str = DEFAUL
         sub_q = task.get('sub_query')
 
         if intent == "sql":
-            combined_contexts.append(get_sql_data_context(sub_q, model))
+            combined_contexts.append(get_sql_data_context(sub_q))
         elif intent == "semantic_product":
             similar = retrieve_similar_products(sub_q, top_k=top_k)
             combined_contexts.append(build_context_for_products(similar))
@@ -305,14 +307,14 @@ def chat_with_rag_stream(prompt: str, previous_message: str, model: str = DEFAUL
 
     print("[DEBUG] Final Input to LLM:", final_input)
 
-    stream = gemini_client.models.generate_content_stream(model=model, contents=final_input)
+    stream = ai_service.generate_content_stream(prompt=final_input)
     for chunk in stream:
-        if chunk.text:
-            yield chunk.text
+        if chunk: # str
+            yield chunk
 
 
-def chat_with_rag(prompt: str, previous_message: str, model: str = DEFAULT_MODEL, top_k: int = 5):
-    for text in chat_with_rag_stream(prompt=prompt, previous_message=previous_message, model=model, top_k=top_k):
+def chat_with_rag(prompt: str, previous_message: str, top_k: int = 5):
+    for text in chat_with_rag_stream(prompt=prompt, previous_message=previous_message, top_k=top_k):
         print(text.rstrip(), end="", flush=True)
     print()
 
@@ -320,13 +322,12 @@ def chat_with_rag(prompt: str, previous_message: str, model: str = DEFAULT_MODEL
 def main():
     print("RAG Hybrid Chatbot (SQL + Vector + Shop Info)")
     print("Commands: exit, quit\n")
-    model = DEFAULT_MODEL
     while True:
         try:
             user_input = input("\n> ").strip()
             if not user_input: continue
             if user_input.lower() in {"exit", "quit"}: break
-            chat_with_rag(prompt=user_input, previous_message="", model=model)
+            chat_with_rag(prompt=user_input, previous_message="")
         except Exception as e:
             print(f"[ERROR] {e}")
             traceback.print_exc()

@@ -11,6 +11,7 @@ from embedding_service import embed_text
 
 ai_service: BaseAIService = GeminiAIService()
 
+
 # ---------------------------------------------------------
 # 1. DATABASE SCHEMA & HELPERS
 # ---------------------------------------------------------
@@ -309,7 +310,7 @@ def chat_with_rag_stream(prompt: str, previous_message: str, top_k: int = 5):
 
     stream = ai_service.generate_content_stream(prompt=final_input)
     for chunk in stream:
-        if chunk: # str
+        if chunk:  # str
             yield chunk
 
 
@@ -317,6 +318,19 @@ def chat_with_rag(prompt: str, previous_message: str, top_k: int = 5):
     for text in chat_with_rag_stream(prompt=prompt, previous_message=previous_message, top_k=top_k):
         print(text.rstrip(), end="", flush=True)
     print()
+
+
+async def chat_with_rag_future(prompt: str, previous_message: str, top_k: int = 5) -> str:
+    import asyncio
+
+    def collect_sync() -> str:
+        response = ""
+        for text in chat_with_rag_stream(prompt=prompt, previous_message=previous_message, top_k=top_k):
+            response += text
+        return response
+
+    # Run the synchronous streaming collection in a background thread to avoid blocking the event loop
+    return await asyncio.to_thread(collect_sync)
 
 
 def main():

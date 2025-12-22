@@ -269,7 +269,7 @@ Instructions:
 - If multiple pieces of information are requested, combine them into one smooth response.
 - If the user asks for products in given list, explain them all, if the user gives the position
   of the position example first one, second one, or nth product, infer that product from previous 
-  context and return sql or semantic_product.
+  context first, if there is none infer from current gathered context.
 - **IMPORTANT: If the user ask about stock or availability, just say in stock or out of stock, don't say exact stock number.**
 """
 

@@ -3,6 +3,10 @@ import requests
 import os
 from dotenv import load_dotenv
 
+from chat_memory_service import ChatMemoryService
+from chatbot import chat_with_rag_future
+import httpx
+
 load_dotenv()
 
 app = Flask(__name__)
@@ -10,6 +14,8 @@ app = Flask(__name__)
 # These will come from your Facebook Developer Console
 ACCESS_TOKEN = os.getenv('META_PAGE_ACCESS_TOKEN')
 VERIFY_TOKEN = os.getenv('META_VERIFY_TOKEN') # You invent this string
+
+chat_memory_service = ChatMemoryService()
 
 @app.route('/', methods=['GET'])
 def verify():
@@ -21,7 +27,7 @@ def verify():
     return "Hello world", 200
 
 @app.route('/', methods=['POST'])
-def webhook():
+async def webhook():
     # Handle incoming messages
     data = request.get_json()
 
@@ -32,18 +38,38 @@ def webhook():
                     sender_id = messaging_event["sender"]["id"]
                     message_text = messaging_event["message"]["text"]
 
+                    # show typing here
+                    url = f"https://graph.facebook.com/v18.0/me/messages?access_token={ACCESS_TOKEN}"
+                    typing_payload = {
+                        "recipient": {"id": sender_id},
+                        "sender_action": "typing_on"
+                    }
+                    async with httpx.AsyncClient() as client:
+                        await client.post(url, json=typing_payload)
+
+                    # await this
+                    response = await chat_with_rag_future(
+                        prompt=message_text,
+                        previous_message=chat_memory_service.get_memory_for_user(sender_id).to_string()
+                    )
+
+
                     # Echo the message back
-                    send_message(sender_id, f"You said: {message_text}")
+                    await send_message(sender_id, response)
+
+                    chat_memory_service.add_user_message(sender_id, message_text)
+                    chat_memory_service.add_bot_message(sender_id, response)
 
     return "ok", 200
 
-def send_message(recipient_id, text):
+async def send_message(recipient_id, text):
     url = f"https://graph.facebook.com/v18.0/me/messages?access_token={ACCESS_TOKEN}"
     payload = {
         "recipient": {"id": recipient_id},
         "message": {"text": text}
     }
-    requests.post(url, json=payload)
+    async with httpx.AsyncClient() as client:
+        await client.post(url, json=payload)
 
 if __name__ == "__main__":
     app.run(port=5000, debug=True)
